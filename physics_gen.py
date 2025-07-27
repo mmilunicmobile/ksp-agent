@@ -18,6 +18,8 @@ from matplotlib import pyplot as plt
 import krpc
 from krpc.services.spacecenter import Vessel
 
+GRAVITY = 9.81 * (units.m / (units.s ** 2))
+
 class VelocityDownCrossEvent(Event):
     """Detect if a satellite crosses a specific threshold altitude while ascending."""
 
@@ -70,7 +72,7 @@ class RocketInfo(ABC):
         initial_orbit = Orbit.from_vectors(self.get_initial_body(), self.get_initial_position(), self.get_initial_velocity())
         # final_ephem = initial_orbit.to_ephem(EpochsArray(initial_orbit.epoch + tofs, method=CowellPropagator(f=self.f)))
         events = [VelocityDownCrossEvent()]
-        final_orbit = initial_orbit.propagate(1000 * units.s, method=CowellPropagator(f=self.f, events=events, rtol=0.01))
+        final_orbit = initial_orbit.propagate(1000 * units.s, method=CowellPropagator(f=self.f, events=events, rtol=0.0001))
         return final_orbit
 
 class SimulatedRocket(RocketInfo):
@@ -119,29 +121,47 @@ class KRPCSimulatedRocket(RocketInfo):
         self.vessel = vessel
         self.body = vessel.orbit.body
         self.reference_frame = self.body.non_rotating_reference_frame
+        self.vessel_reference_frame = self.vessel.reference_frame
         self.flight = vessel.flight(self.reference_frame)
+        self.body_radius = self.body.equatorial_radius * units.m
+        self.inital_position = np.array(self.vessel.position(self.reference_frame)) * units.m
+        self.initial_velocity = np.array(self.vessel.velocity(self.reference_frame)) * (units.m / units.s)
 
-    def thrust_acceleration_at_time_t(self, time, u, direction):
-        g = 9.81 * (units.m / (units.s ** 2))
-        thrust_portion = 1
-        altitude = self.body.altitude_at_position(tuple(u[0:3] * 1000), self.reference_frame)
-        altitude = 0
-        pressure = (self.body.pressure_at(altitude) * units.Pa).to_value(cds.atm)
-        self.thrust = self.vessel.available_thrust_at(pressure)
-        self.thrust *= units.N
-        self.isp = self.vessel.specific_impulse_at(pressure)
-        self.isp *= units.s
+        self.altitude_curve = np.linspace(0, self.body.atmosphere_depth*1.1, 100) * units.m
+        self.pressure_curve = np.array(
+            [self.body.pressure_at(a.to_value(units.m)) for a in self.altitude_curve]
+        )  * units.Pa
+        self.thrust_curve = np.array(
+            [self.vessel.available_thrust_at(a.to_value(cds.atm)) for a in self.pressure_curve]
+        )  * units.N
+        self.isp_curve = np.array(
+            [self.vessel.specific_impulse_at(a.to_value(cds.atm)) for a in self.pressure_curve]
+        )  * units.s
+
         self.mass = self.vessel.mass * units.kg
         resources = self.vessel.resources
         self.fuel_mass = resources.amount("LiquidFuel") * 5 + resources.amount("Oxidizer") * 5
         self.fuel_mass *= units.kg
-        mass_flow_rate = self.thrust / (self.isp * g) * thrust_portion
-        self.burn_time = (self.fuel_mass / mass_flow_rate).to(units.s)
 
-        if (time < self.burn_time):
-            g = 9.81 * (units.m / (units.s ** 2))
+        self.initial_body = Body.from_parameters(
+            parent=None,
+            k=(self.body.gravitational_parameter) * (units.m ** 3 / units.s ** 2),
+            R=self.body.equatorial_radius * units.m,
+            name=self.body.name,
+            symbol=self.body.name[0]
+        )
+
+    def thrust_acceleration_at_time_t(self, time, u, direction):
+        thrust_portion = 1
+        altitude = np.linalg.norm(u[0:3] * units.km) - self.body_radius
+        self.thrust = np.interp(altitude, self.altitude_curve, self.thrust_curve)
+        self.isp = np.interp(altitude, self.altitude_curve, self.isp_curve)
+        mass_flow_rate = self.thrust / (self.isp * GRAVITY) * thrust_portion
+        burn_time = (self.fuel_mass / mass_flow_rate).to(units.s)
+
+        if (time < burn_time):
             thrust_portion = 1
-            mass_flow_rate = self.thrust / (self.isp * g) * thrust_portion
+            mass_flow_rate = self.thrust / (self.isp * GRAVITY) * thrust_portion
             current_mass = self.mass - (mass_flow_rate * time)
             acceleration = self.thrust / current_mass
             return acceleration * direction
@@ -149,18 +169,18 @@ class KRPCSimulatedRocket(RocketInfo):
             return 0 * (units.m / (units.s ** 2)) * direction
 
     def get_initial_position(self):
-        return np.array(self.vessel.position(self.reference_frame)) * units.m
+        return self.inital_position
 
     def get_initial_velocity(self):
-        return np.array(self.vessel.velocity(self.reference_frame)) * (units.m / units.s)
+        return self.initial_velocity
 
     def aerodynamic_acceleration_at_time_t(self, time, u, direction):
-        position = tuple(u[0:3] * 1000)
-        velocity = tuple(u[3:6] * 1000)
-        altitude = self.body.altitude_at_position(position, self.reference_frame)
-        force = self.flight.simulate_aerodynamic_force_at(self.body, position, velocity)
-        force = force
-        return np.array(force) * (units.N) / (self.vessel.mass * units.kg)
+        # position = tuple(u[0:3] * 1000)
+        # velocity = tuple(u[3:6] * 1000)
+        # altitude = self.body.altitude_at_position(position, self.reference_frame)
+        # force = self.flight.simulate_aerodynamic_force_at(self.body, position, velocity)
+        force = (0,0,0)
+        return np.array(force) * (units.N) / (self.mass)
 
     def direction_controller(self, time, u):
         return u[0:3] / np.linalg.norm(u[0:3])
@@ -169,24 +189,26 @@ class KRPCSimulatedRocket(RocketInfo):
         return np.array([1,0,0])
     
     def get_initial_body(self) -> Body:
-        return Body.from_parameters(
-            parent=None,
-            k=(self.body.mass*  6.6743E-11) * (units.m ** 3 / units.s ** 2),
-            R=self.body.equatorial_radius * units.m,
-            name=self.body.name,
-            symbol=self.body.name[0]
-        )
+        return self.initial_body
     
 def main():
     conn = krpc.connect()
+    tot = 0
     rocket = KRPCSimulatedRocket(conn.space_center.active_vessel)
     while (True):
         resultant = rocket.simulate_launch()
-        
-        # print(resultant)
         print(resultant.r_a)
-        # print(resultant.r)
 
+def aerodynamic_test():
+    conn = krpc.connect()
+    vessel = conn.space_center.active_vessel
+    reference_frame = vessel.reference_frame
+    flight = vessel.flight(reference_frame)
+    pos = vessel.position(reference_frame)
+    def f(velocity):
+        return flight.simulate_aerodynamic_force_at(vessel.orbit.body, pos, velocity)
+    for i in range(400):
+        print(f((0,i/100,0)))
 
 if __name__ == "__main__":
     main()
