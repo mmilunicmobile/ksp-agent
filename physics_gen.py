@@ -19,6 +19,7 @@ import krpc
 from krpc.services.spacecenter import Vessel
 
 GRAVITY = 9.81 * (units.m / (units.s ** 2))
+GAS_CONSTANT = 287.053 * (units.J / units.kg / units.K)
 
 class VelocityDownCrossEvent(Event):
     """Detect if a satellite crosses a specific threshold altitude while ascending."""
@@ -126,11 +127,15 @@ class KRPCSimulatedRocket(RocketInfo):
         self.body_radius = self.body.equatorial_radius * units.m
         self.inital_position = np.array(self.vessel.position(self.reference_frame)) * units.m
         self.initial_velocity = np.array(self.vessel.velocity(self.reference_frame)) * (units.m / units.s)
+        self.body_rotational_angle = np.array((0, self.body.rotational_speed, 0)) * (units.rad / units.s)
 
         self.altitude_curve = np.linspace(0, self.body.atmosphere_depth*1.1, 100) * units.m
         self.pressure_curve = np.array(
             [self.body.pressure_at(a.to_value(units.m)) for a in self.altitude_curve]
         )  * units.Pa
+        self.tempertature_curve = np.array(
+            [self.body.temperature_at((0, a.to_value(units.m), 0), self.vessel_reference_frame) for a in self.altitude_curve]
+        ) * (units.K)
         self.thrust_curve = np.array(
             [self.vessel.available_thrust_at(a.to_value(cds.atm)) for a in self.pressure_curve]
         )  * units.N
@@ -175,12 +180,25 @@ class KRPCSimulatedRocket(RocketInfo):
         return self.initial_velocity
 
     def aerodynamic_acceleration_at_time_t(self, time, u, direction):
+        position = np.array(u[0:3]) * units.km
+        true_velocity = np.array(u[3:6]) * units.km / units.s
+        surface_velocity = np.cross(self.body_rotational_angle, position)
+        velocity = true_velocity - surface_velocity
+        altitude = np.linalg.norm(u[0:3] * units.km) - self.body_radius
+        pressure = np.interp(altitude, self.altitude_curve, self.pressure_curve)
+        temperature = np.interp(altitude, self.altitude_curve, self.tempertature_curve)
+        atmospheric_density = pressure / (GAS_CONSTANT * temperature)
+        speed_of_sound = ((1.4 * GAS_CONSTANT * temperature) ** 0.5).to(units.m / units.s)
+        mach_number = np.linalg.norm(velocity) / speed_of_sound
+        Acof =  np.interp(altitude, self.mach_curve, self.Acof_curve)
+        force_drag = 0.5 * atmospheric_density * np.linalg.norm(velocity)**2 * Acof
+        force = velocity / np.linalg.norm(velocity) * force_drag * -1
+
         # position = tuple(u[0:3] * 1000)
         # velocity = tuple(u[3:6] * 1000)
         # altitude = self.body.altitude_at_position(position, self.reference_frame)
         # force = self.flight.simulate_aerodynamic_force_at(self.body, position, velocity)
-        force = (0,0,0)
-        return np.array(force) * (units.N) / (self.mass)
+        return force
 
     def direction_controller(self, time, u):
         return u[0:3] / np.linalg.norm(u[0:3])
@@ -206,9 +224,10 @@ def aerodynamic_test():
     flight = vessel.flight(reference_frame)
     pos = vessel.position(reference_frame)
     def f(velocity):
-        return flight.simulate_aerodynamic_force_at(vessel.orbit.body, pos, velocity)
-    for i in range(400):
+        velocity = np.array(velocity) * flight.speed_of_sound
+        return np.linalg.norm(flight.simulate_aerodynamic_force_at(vessel.orbit.body, pos, tuple(velocity))) * 2 / (vessel.orbit.body.atmospheric_density_at_position(pos, reference_frame) * np.linalg.norm(velocity) ** 2)
+    for i in range(1,3000,5):
         print(f((0,i/100,0)))
 
 if __name__ == "__main__":
-    main()
+    aerodynamic_test()
