@@ -70,7 +70,7 @@ class RocketInfo(ABC):
         initial_orbit = Orbit.from_vectors(self.get_initial_body(), self.get_initial_position(), self.get_initial_velocity())
         # final_ephem = initial_orbit.to_ephem(EpochsArray(initial_orbit.epoch + tofs, method=CowellPropagator(f=self.f)))
         events = [VelocityDownCrossEvent()]
-        final_orbit = initial_orbit.propagate(1000 * units.s, method=CowellPropagator(f=self.f, events=events, rtol=0.00001))
+        final_orbit = initial_orbit.propagate(1000 * units.s, method=CowellPropagator(f=self.f, events=events, rtol=0.01))
         return final_orbit
 
 class SimulatedRocket(RocketInfo):
@@ -159,8 +159,7 @@ class KRPCSimulatedRocket(RocketInfo):
         velocity = tuple(u[3:6] * 1000)
         altitude = self.body.altitude_at_position(position, self.reference_frame)
         force = self.flight.simulate_aerodynamic_force_at(self.body, position, velocity)
-
-        force = (0,0,0)
+        force = force
         return np.array(force) * (units.N) / (self.vessel.mass * units.kg)
 
     def direction_controller(self, time, u):
@@ -181,11 +180,12 @@ class KRPCSimulatedRocket(RocketInfo):
 def main():
     conn = krpc.connect()
     rocket = KRPCSimulatedRocket(conn.space_center.active_vessel)
-    resultant = rocket.simulate_launch()
-    
-    print(resultant)
-    print(resultant.r_a)
-    print(resultant.r)
+    while (True):
+        resultant = rocket.simulate_launch()
+        
+        # print(resultant)
+        print(resultant.r_a)
+        # print(resultant.r)
 
 
 if __name__ == "__main__":
