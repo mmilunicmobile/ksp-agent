@@ -3,30 +3,59 @@ import krpc
 from astropy import units
 import time
 import numpy as np
+from krpc.services.spacecenter import Vessel
+from threading import Thread
+
+
+shutoff_altitude = 0
 
 
 def main():
     global shutoff_altitude
     conn = krpc.connect()
     # tot = 0
-    rocket = KRPCSimulatedRocket(conn.space_center.active_vessel)
+    space_center = conn.space_center
+    if space_center is None:
+        raise ValueError("No space center found.")
+
+    rocket = KRPCSimulatedRocket(space_center.active_vessel)
     # def periapsis_calc(height):
     #     height = height[0]
     #     height *= 0.001
     #     rocket.direction_controller = lambda time,u: (u[0:3] / np.linalg.norm(u[0:3]), min(1, max(height,0)))
     #     resultant = rocket.simulate_launch()
     #     return ((resultant.r_a.to_value(units.m) - 600000) - 10000) ** 2
+    height_shutoff = Thread(
+        target=height_shutoff_thread, args=(space_center.active_vessel,)
+    )
+    height_shutoff.daemon = True
+    height_shutoff.start()
 
-    max_height = 700000 * units.m
-    min_height = 600000 * units.m
-    target_height = 620000 * units.m
+    while True:
+        height = calculate_shutoff(rocket)
+        shutoff_altitude = height
+        rocket.refresh()
+        print(height)
+
+
+def height_shutoff_thread(vessel: Vessel):
+    reference = vessel.orbit.body.reference_frame
+    while True:
+        vessel.control.throttle = shutoff_altitude
+        # vessel.control.throttle = 1 if np.linalg.norm(vessel.position(reference)) < shutoff_altitude else 0
+
+
+def calculate_shutoff(rocket):
+    max_height = 1
+    min_height = 0
+    target_height = 610000 * units.m
 
     start_time = time.time()
-    while max_height > (min_height + 3 * units.m):
+    while max_height > (min_height + 0.01):
         mean_height = (max_height + min_height) / 2
         # def f(time, u):
         #     return (u[0:3] / np.linalg.norm(u[0:3]), 1 if (np.linalg.norm(u[0:3]) * units.km) < mean_height else 0)
-        rocket.set_direction_controller_args([mean_height.to_value(units.m)])
+        rocket.set_direction_controller_args([mean_height])
         resultant_orbit = rocket.simulate_launch()
         height_at_max_height, velocity_at_max_height = resultant_orbit.rv()
         if np.linalg.norm(height_at_max_height) < target_height:
@@ -34,8 +63,9 @@ def main():
         else:
             max_height = mean_height
     end_time = time.time()
-    print(max_height, min_height)
-    print(end_time - start_time)
+    # print(max_height, min_height)
+    # print(end_time - start_time)
+    return min_height
 
     # threading.Thread(target=shutoff_height_monitor, args=[conn.space_center.active_vessel]).start()
     # while (True):

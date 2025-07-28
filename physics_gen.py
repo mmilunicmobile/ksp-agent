@@ -2,21 +2,13 @@ from astropy import units
 from astropy.units import cds
 from poliastro.bodies import Body
 from poliastro.twobody.events import Event
-from poliastro.twobody.propagation import CowellPropagator
 from poliastro.core.propagation import func_twobody
 import numpy as np
 from poliastro.twobody import Orbit
-from poliastro.twobody.sampling import EpochsArray
-from astropy.time import TimeDelta
 from matplotlib import pyplot as plt
-import krpc
 from krpc.services.spacecenter import Vessel
 from poliastro._math.ivp import DOP853, solve_ivp
-from numba import njit, jit
-from numba.experimental import jitclass
-from scipy.optimize import minimize
-import threading
-import time
+from numba import njit
 
 GRAVITY = 9.81 * (units.m / (units.s**2))
 GRAVITY_NUMBA = 9.81
@@ -252,7 +244,8 @@ def aerodynamic_acceleration_at_time_t(
 def direction_controller(time, u, direction_controller_args):
     max_height = direction_controller_args[0]
     return (u[0:3] / np.linalg.norm(u[0:3])), (
-        1 if np.linalg.norm(u[0:3]) < max_height else 0
+        max_height
+        # 1 if np.linalg.norm(u[0:3]) < max_height else 0
     )
 
 
