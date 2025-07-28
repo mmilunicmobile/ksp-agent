@@ -73,7 +73,7 @@ class RocketInfo(ABC):
         initial_orbit = Orbit.from_vectors(self.get_initial_body(), self.get_initial_position(), self.get_initial_velocity())
         # final_ephem = initial_orbit.to_ephem(EpochsArray(initial_orbit.epoch + tofs, method=CowellPropagator(f=self.f)))
         events = [VelocityDownCrossEvent()]
-        final_orbit = initial_orbit.propagate(1000 * units.s, method=CowellPropagator(f=self.f, events=events, rtol=0.0001))
+        final_orbit = initial_orbit.propagate(1000 * units.s, method=CowellPropagator(f=self.f, events=events, rtol=0.00001))
         return final_orbit
 
 class SimulatedRocket(RocketInfo):
@@ -156,6 +156,26 @@ class KRPCSimulatedRocket(RocketInfo):
             symbol=self.body.name[0]
         )
 
+        flight = vessel.flight(self.vessel_reference_frame)
+        pos = vessel.position(self.vessel_reference_frame)
+        def mach_number_to_Acof(velocity):
+            velocity = np.array(velocity) * flight.speed_of_sound
+            return np.linalg.norm(flight.simulate_aerodynamic_force_at(vessel.orbit.body, pos, tuple(velocity))) * 2 / (vessel.orbit.body.atmospheric_density_at_position(pos, self.vessel_reference_frame) * np.linalg.norm(velocity) ** 2)
+        
+        self.mach_curve = np.linspace(0.01, 30, 500)
+        self.Acof_curve = np.array(
+            [mach_number_to_Acof((0,a,0)) for a in self.mach_curve]
+        ) * (units.m ** 2)
+    
+    def refresh(self):
+        self.inital_position = np.array(self.vessel.position(self.reference_frame)) * units.m
+        self.initial_velocity = np.array(self.vessel.velocity(self.reference_frame)) * (units.m / units.s)
+        self.mass = self.vessel.mass * units.kg
+        resources = self.vessel.resources
+        self.fuel_mass = resources.amount("LiquidFuel") * 5 + resources.amount("Oxidizer") * 5
+        self.fuel_mass *= units.kg
+
+
     def thrust_acceleration_at_time_t(self, time, u, direction):
         thrust_portion = 1
         altitude = np.linalg.norm(u[0:3] * units.km) - self.body_radius
@@ -165,8 +185,6 @@ class KRPCSimulatedRocket(RocketInfo):
         burn_time = (self.fuel_mass / mass_flow_rate).to(units.s)
 
         if (time < burn_time):
-            thrust_portion = 1
-            mass_flow_rate = self.thrust / (self.isp * GRAVITY) * thrust_portion
             current_mass = self.mass - (mass_flow_rate * time)
             acceleration = self.thrust / current_mass
             return acceleration * direction
@@ -179,10 +197,10 @@ class KRPCSimulatedRocket(RocketInfo):
     def get_initial_velocity(self):
         return self.initial_velocity
 
-    def aerodynamic_acceleration_at_time_t(self, time, u, direction):
+    def aerodynamic_acceleration_at_time_t(self, time, u, spaceship_direction):
         position = np.array(u[0:3]) * units.km
         true_velocity = np.array(u[3:6]) * units.km / units.s
-        surface_velocity = np.cross(self.body_rotational_angle, position)
+        surface_velocity = np.cross(self.body_rotational_angle, position) / units.rad
         velocity = true_velocity - surface_velocity
         altitude = np.linalg.norm(u[0:3] * units.km) - self.body_radius
         pressure = np.interp(altitude, self.altitude_curve, self.pressure_curve)
@@ -190,15 +208,23 @@ class KRPCSimulatedRocket(RocketInfo):
         atmospheric_density = pressure / (GAS_CONSTANT * temperature)
         speed_of_sound = ((1.4 * GAS_CONSTANT * temperature) ** 0.5).to(units.m / units.s)
         mach_number = np.linalg.norm(velocity) / speed_of_sound
-        Acof =  np.interp(altitude, self.mach_curve, self.Acof_curve)
+        Acof =  np.interp(mach_number, self.mach_curve, self.Acof_curve)
         force_drag = 0.5 * atmospheric_density * np.linalg.norm(velocity)**2 * Acof
         force = velocity / np.linalg.norm(velocity) * force_drag * -1
-
+        
+        thrust_portion = 1
+        altitude = np.linalg.norm(u[0:3] * units.km) - self.body_radius
+        self.thrust = np.interp(altitude, self.altitude_curve, self.thrust_curve)
+        self.isp = np.interp(altitude, self.altitude_curve, self.isp_curve)
+        mass_flow_rate = self.thrust / (self.isp * GRAVITY) * thrust_portion
+        burn_time = (self.fuel_mass / mass_flow_rate).to(units.s)
+        current_mass = self.mass - (mass_flow_rate * min(time,burn_time))
+        acceleration = force / current_mass
         # position = tuple(u[0:3] * 1000)
         # velocity = tuple(u[3:6] * 1000)
         # altitude = self.body.altitude_at_position(position, self.reference_frame)
         # force = self.flight.simulate_aerodynamic_force_at(self.body, position, velocity)
-        return force
+        return acceleration
 
     def direction_controller(self, time, u):
         return u[0:3] / np.linalg.norm(u[0:3])
@@ -216,6 +242,7 @@ def main():
     while (True):
         resultant = rocket.simulate_launch()
         print(resultant.r_a)
+        rocket.refresh()
 
 def aerodynamic_test():
     conn = krpc.connect()
@@ -230,4 +257,4 @@ def aerodynamic_test():
         print(f((0,i/100,0)))
 
 if __name__ == "__main__":
-    aerodynamic_test()
+    main()
