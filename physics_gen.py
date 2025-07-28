@@ -21,6 +21,7 @@ from poliastro._math.ivp import DOP853, solve_ivp
 from numba import njit
 from scipy.optimize import minimize
 import threading
+import time
 
 GRAVITY = 9.81 * (units.m / (units.s ** 2))
 GAS_CONSTANT = 287.053 * (units.J / units.kg / units.K)
@@ -261,31 +262,54 @@ class KRPCSimulatedRocket(RocketInfo):
     def get_initial_mass(self) -> Quantity:
         return self.mass
     
-shutoff_altitude = 0
+shutoff_altitude = 1000
 
 def main():
     global shutoff_altitude
     conn = krpc.connect()
-    tot = 0
+    # tot = 0
     rocket = KRPCSimulatedRocket(conn.space_center.active_vessel)
-    def periapsis_calc(height):
-        height = height[0]
-        height *= 0.001
-        rocket.direction_controller = lambda time,u: (u[0:3] / np.linalg.norm(u[0:3]), min(1, max(height,0)))
-        resultant = rocket.simulate_launch()
-        return ((resultant.r_a.to_value(units.m) - 600000) - 10000) ** 2
+    # def periapsis_calc(height):
+    #     height = height[0]
+    #     height *= 0.001
+    #     rocket.direction_controller = lambda time,u: (u[0:3] / np.linalg.norm(u[0:3]), min(1, max(height,0)))
+    #     resultant = rocket.simulate_launch()
+    #     return ((resultant.r_a.to_value(units.m) - 600000) - 10000) ** 2
     
-    threading.Thread(target=shutoff_height_monitor, args=[conn.space_center.active_vessel]).start()
-    while (True):
-        x0 = [0.5]
-        result = minimize(periapsis_calc, x0, method='Nelder-Mead', options={'xatol': 1e-4, 'fatol': 1e-3}, bounds=[(0,1)])
-        print(result.x[0])
-        shutoff_altitude = result.x[0]
-        rocket.refresh()
+    max_height = 700000 * units.m
+    min_height = 600000 * units.m
+    target_height = 610000 * units.m
 
-def shutoff_height_monitor(vessel: Vessel):
+    start_time = time.time()
+    while max_height > (min_height + 3 * units.m):
+        mean_height = (max_height + min_height) / 2
+        def f(time, u):
+            return (u[0:3] / np.linalg.norm(u[0:3]), 1 if (np.linalg.norm(u[0:3]) * units.km) < mean_height else 0)
+        rocket.direction_controller = f
+        resultant_orbit = rocket.simulate_launch()
+        height_at_max_height, velocity_at_max_height = resultant_orbit.rv()
+        if np.linalg.norm(height_at_max_height) < target_height:
+            min_height = mean_height
+        else:
+            max_height = mean_height
+    end_time = time.time()
+    print(max_height, min_height)
+    print(end_time - start_time)
+
+    # threading.Thread(target=shutoff_height_monitor, args=[conn.space_center.active_vessel]).start()
+    # while (True):
+    #     x0 = [0.5]
+    #     result = minimize(periapsis_calc, x0, method='Nelder-Mead', options={'xatol': 1e-4, 'fatol': 1e-3}, bounds=[(0,1)])
+    #     print(result.x[0])
+    #     shutoff_altitude = result.x[0]
+    #     rocket.refresh()
+
+def shutoff_height_monitor():
+    conn = krpc.connect()
+    # tot = 0
+    vessel = conn.space_center.active_vessel
     while True:
-        vessel.control.throttle = shutoff_altitude
+        vessel.control.throttle = 1 if 1354.98046875 > vessel.flight(vessel.reference_frame).mean_altitude else 0
 
 def aerodynamic_test():
     conn = krpc.connect()
@@ -300,4 +324,4 @@ def aerodynamic_test():
         print(f((0,i/100,0)))
 
 if __name__ == "__main__":
-    main()
+    shutoff_height_monitor()
