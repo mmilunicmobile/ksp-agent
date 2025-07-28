@@ -3,6 +3,7 @@ import time
 import math
 from scipy.optimize import minimize
 
+
 def main():
     print("Hello from krpc-module!")
     conn = krpc.connect()
@@ -10,7 +11,6 @@ def main():
     time.sleep(5)
 
     target_altitude = 500
-    
 
     current_vessel = conn.space_center.active_vessel
 
@@ -30,9 +30,10 @@ def main():
         altitude = current_vessel.flight(srf_frame).mean_altitude
         tta = current_vessel.flight(srf_frame).vertical_speed
         theoretical_elevation = apoapsis if tta > 0 else altitude
-        throttle = min(1, max(0,target_altitude - theoretical_elevation) / 10)
+        throttle = min(1, max(0, target_altitude - theoretical_elevation) / 10)
         print(throttle, theoretical_elevation, tta)
         current_vessel.control.throttle = throttle
+
 
 if __name__ == "__main__":
     main()
