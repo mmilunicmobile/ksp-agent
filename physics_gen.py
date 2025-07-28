@@ -17,6 +17,8 @@ from astropy.time import TimeDelta
 from matplotlib import pyplot as plt
 import krpc
 from krpc.services.spacecenter import Vessel
+from poliastro._math.ivp import DOP853, solve_ivp
+from numba import njit
 
 GRAVITY = 9.81 * (units.m / (units.s ** 2))
 GAS_CONSTANT = 287.053 * (units.J / units.kg / units.K)
@@ -60,12 +62,10 @@ class RocketInfo(ABC):
 
     def f(self, time, u, k):
         # print(u, time)
-        du_kep = func_twobody(time, u, k)
+        du_kep = np.array([*func_twobody(time, u[0:6], k), 0])
         ship_direction = self.direction_controller(time*units.s, u)
-        a_thrust_x, a_thrust_y, a_thrust_z = self.thrust_acceleration_at_time_t(time*units.s, u, ship_direction).to_value(units.km/units.s**2)
-        du_thrust = np.array([0,0,0, a_thrust_x, a_thrust_y, a_thrust_z])
-        a_drag_x, a_drag_y, a_drag_z = self.aerodynamic_acceleration_at_time_t(time*units.s, u, ship_direction).to_value(units.km/units.s**2)
-        du_drag = np.array([0,0,0, a_drag_x, a_drag_y, a_drag_z])
+        du_thrust = self.thrust_acceleration_at_time_t(time*units.s, u, ship_direction)
+        du_drag = self.aerodynamic_acceleration_at_time_t(time*units.s, u, ship_direction)
         return du_kep + du_thrust + du_drag
     
     def simulate_launch(self):
@@ -73,7 +73,40 @@ class RocketInfo(ABC):
         initial_orbit = Orbit.from_vectors(self.get_initial_body(), self.get_initial_position(), self.get_initial_velocity())
         # final_ephem = initial_orbit.to_ephem(EpochsArray(initial_orbit.epoch + tofs, method=CowellPropagator(f=self.f)))
         events = [VelocityDownCrossEvent()]
-        final_orbit = initial_orbit.propagate(1000 * units.s, method=CowellPropagator(f=self.f, events=events, rtol=0.00001))
+        time_of_flight = (10000 * units.s).to_value(units.s)
+        mass = self.get_initial_mass()
+        u0 = [*initial_orbit.r.to_value(units.km), *initial_orbit.v.to_value(units.km/units.s), mass.to_value(units.kg)]
+        result = solve_ivp(
+            self.f,
+            (0, time_of_flight),
+            u0,
+            args=(initial_orbit.attractor.k.to_value(units.km ** 3 / units.s**2),),
+            rtol=1e-4,
+            atol=1e-12,
+            method=DOP853,
+            dense_output=True,
+            events=events,
+        )
+        if not result.success:
+            raise RuntimeError("Integration failed")
+        
+        last_t = time_of_flight
+
+        if events is not None:
+            # Collect only the terminal events
+            terminal_events = [event for event in events if event.terminal]
+
+            # If there are no terminal events, then the last time of integration is the
+            # greatest one from the original array of propagation times
+            if not terminal_events:
+                last_t = time_of_flight
+            else:
+                # Filter the event which triggered first
+                last_t = min(event._last_t for event in terminal_events)
+        
+        final_orbit_vector = result.sol(last_t)
+        # final_orbit = initial_orbit.propagate(1000 * units.s, method=CowellPropagator(f=self.f, events=events, rtol=0.00001))
+        final_orbit = Orbit.from_vectors(initial_orbit.attractor, final_orbit_vector[0:3] * units.km, final_orbit_vector[3:6] * (units.km / units.s), initial_orbit.epoch)
         return final_orbit
 
 class SimulatedRocket(RocketInfo):
@@ -175,21 +208,19 @@ class KRPCSimulatedRocket(RocketInfo):
         self.fuel_mass = resources.amount("LiquidFuel") * 5 + resources.amount("Oxidizer") * 5
         self.fuel_mass *= units.kg
 
-
     def thrust_acceleration_at_time_t(self, time, u, direction):
         thrust_portion = 1
         altitude = np.linalg.norm(u[0:3] * units.km) - self.body_radius
         self.thrust = np.interp(altitude, self.altitude_curve, self.thrust_curve)
         self.isp = np.interp(altitude, self.altitude_curve, self.isp_curve)
         mass_flow_rate = self.thrust / (self.isp * GRAVITY) * thrust_portion
-        burn_time = (self.fuel_mass / mass_flow_rate).to(units.s)
+        current_mass = u[6] * units.kg
 
-        if (time < burn_time):
-            current_mass = self.mass - (mass_flow_rate * time)
+        if (current_mass > (self.mass - self.fuel_mass)):
             acceleration = self.thrust / current_mass
-            return acceleration * direction
+            return np.array([0,0,0, *(acceleration * direction).to_value(units.km / units.s**2), -mass_flow_rate.to_value(units.kg/units.s)])
         else:
-            return 0 * (units.m / (units.s ** 2)) * direction
+            return np.array([0,0,0, 0,0,0, 0])
 
     def get_initial_position(self):
         return self.inital_position
@@ -212,19 +243,14 @@ class KRPCSimulatedRocket(RocketInfo):
         force_drag = 0.5 * atmospheric_density * np.linalg.norm(velocity)**2 * Acof
         force = velocity / np.linalg.norm(velocity) * force_drag * -1
         
-        thrust_portion = 1
-        altitude = np.linalg.norm(u[0:3] * units.km) - self.body_radius
-        self.thrust = np.interp(altitude, self.altitude_curve, self.thrust_curve)
-        self.isp = np.interp(altitude, self.altitude_curve, self.isp_curve)
-        mass_flow_rate = self.thrust / (self.isp * GRAVITY) * thrust_portion
-        burn_time = (self.fuel_mass / mass_flow_rate).to(units.s)
-        current_mass = self.mass - (mass_flow_rate * min(time,burn_time))
+        current_mass = u[6] * units.kg
+
         acceleration = force / current_mass
         # position = tuple(u[0:3] * 1000)
         # velocity = tuple(u[3:6] * 1000)
         # altitude = self.body.altitude_at_position(position, self.reference_frame)
         # force = self.flight.simulate_aerodynamic_force_at(self.body, position, velocity)
-        return acceleration
+        return np.array([0,0,0, *acceleration.to_value(units.km/units.s**2), 0])
 
     def direction_controller(self, time, u):
         return u[0:3] / np.linalg.norm(u[0:3])
@@ -234,6 +260,9 @@ class KRPCSimulatedRocket(RocketInfo):
     
     def get_initial_body(self) -> Body:
         return self.initial_body
+    
+    def get_initial_mass(self) -> Quantity:
+        return self.mass
     
 def main():
     conn = krpc.connect()
