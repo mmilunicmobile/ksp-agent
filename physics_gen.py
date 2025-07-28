@@ -19,6 +19,8 @@ import krpc
 from krpc.services.spacecenter import Vessel
 from poliastro._math.ivp import DOP853, solve_ivp
 from numba import njit
+from scipy.optimize import minimize
+import threading
 
 GRAVITY = 9.81 * (units.m / (units.s ** 2))
 GAS_CONSTANT = 287.053 * (units.J / units.kg / units.K)
@@ -49,23 +51,18 @@ class RocketInfo(ABC):
         pass
 
     @abstractmethod
-    def thrust_acceleration_at_time_t(self, time, u, direction) -> Quantity:
+    def thrust_acceleration_at_time_t(self, time, u) -> Quantity:
         pass
 
     @abstractmethod
-    def aerodynamic_acceleration_at_time_t(self, time, u, direction) -> Quantity:
-        pass
-
-    @abstractmethod
-    def direction_controller(self, time, u) -> np.ndarray:
+    def aerodynamic_acceleration_at_time_t(self, time, u) -> Quantity:
         pass
 
     def f(self, time, u, k):
         # print(u, time)
         du_kep = np.array([*func_twobody(time, u[0:6], k), 0])
-        ship_direction = self.direction_controller(time*units.s, u)
-        du_thrust = self.thrust_acceleration_at_time_t(time*units.s, u, ship_direction)
-        du_drag = self.aerodynamic_acceleration_at_time_t(time*units.s, u, ship_direction)
+        du_thrust = self.thrust_acceleration_at_time_t(time*units.s, u)
+        du_drag = self.aerodynamic_acceleration_at_time_t(time*units.s, u)
         return du_kep + du_thrust + du_drag
     
     def simulate_launch(self):
@@ -208,12 +205,12 @@ class KRPCSimulatedRocket(RocketInfo):
         self.fuel_mass = resources.amount("LiquidFuel") * 5 + resources.amount("Oxidizer") * 5
         self.fuel_mass *= units.kg
 
-    def thrust_acceleration_at_time_t(self, time, u, direction):
-        thrust_portion = 1
+    def thrust_acceleration_at_time_t(self, time, u):
+        direction, thrust_portion = self.direction_controller(time, u)
         altitude = np.linalg.norm(u[0:3] * units.km) - self.body_radius
-        self.thrust = np.interp(altitude, self.altitude_curve, self.thrust_curve)
+        self.thrust = np.interp(altitude, self.altitude_curve, self.thrust_curve) * thrust_portion
         self.isp = np.interp(altitude, self.altitude_curve, self.isp_curve)
-        mass_flow_rate = self.thrust / (self.isp * GRAVITY) * thrust_portion
+        mass_flow_rate = self.thrust / (self.isp * GRAVITY)
         current_mass = u[6] * units.kg
 
         if (current_mass > (self.mass - self.fuel_mass)):
@@ -228,7 +225,7 @@ class KRPCSimulatedRocket(RocketInfo):
     def get_initial_velocity(self):
         return self.initial_velocity
 
-    def aerodynamic_acceleration_at_time_t(self, time, u, spaceship_direction):
+    def aerodynamic_acceleration_at_time_t(self, time, u):
         position = np.array(u[0:3]) * units.km
         true_velocity = np.array(u[3:6]) * units.km / units.s
         surface_velocity = np.cross(self.body_rotational_angle, position) / units.rad
@@ -253,7 +250,7 @@ class KRPCSimulatedRocket(RocketInfo):
         return np.array([0,0,0, *acceleration.to_value(units.km/units.s**2), 0])
 
     def direction_controller(self, time, u):
-        return u[0:3] / np.linalg.norm(u[0:3])
+        return (u[0:3] / np.linalg.norm(u[0:3])), 1
 
     def trajectory(self, altitude):
         return np.array([1,0,0])
@@ -264,14 +261,31 @@ class KRPCSimulatedRocket(RocketInfo):
     def get_initial_mass(self) -> Quantity:
         return self.mass
     
+shutoff_altitude = 0
+
 def main():
+    global shutoff_altitude
     conn = krpc.connect()
     tot = 0
     rocket = KRPCSimulatedRocket(conn.space_center.active_vessel)
-    while (True):
+    def periapsis_calc(height):
+        height = height[0]
+        height *= 0.001
+        rocket.direction_controller = lambda time,u: (u[0:3] / np.linalg.norm(u[0:3]), min(1, max(height,0)))
         resultant = rocket.simulate_launch()
-        print(resultant.r_a)
+        return ((resultant.r_a.to_value(units.m) - 600000) - 10000) ** 2
+    
+    threading.Thread(target=shutoff_height_monitor, args=[conn.space_center.active_vessel]).start()
+    while (True):
+        x0 = [0.5]
+        result = minimize(periapsis_calc, x0, method='Nelder-Mead', options={'xatol': 1e-4, 'fatol': 1e-3}, bounds=[(0,1)])
+        print(result.x[0])
+        shutoff_altitude = result.x[0]
         rocket.refresh()
+
+def shutoff_height_monitor(vessel: Vessel):
+    while True:
+        vessel.control.throttle = shutoff_altitude
 
 def aerodynamic_test():
     conn = krpc.connect()
