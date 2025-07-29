@@ -6,12 +6,8 @@ import numpy as np
 from krpc.services.spacecenter import Vessel
 from threading import Thread
 
-
-shutoff_altitude = 0
-
-
 def main():
-    global shutoff_altitude
+    global controls_array
     conn = krpc.connect()
     # tot = 0
     space_center = conn.space_center
@@ -26,36 +22,30 @@ def main():
     #     resultant = rocket.simulate_launch()
     #     return ((resultant.r_a.to_value(units.m) - 600000) - 10000) ** 2
     height_shutoff = Thread(
-        target=height_shutoff_thread, args=(space_center.active_vessel,)
+        target=control_monitor, args=(space_center.active_vessel,)
     )
     height_shutoff.daemon = True
     height_shutoff.start()
 
     while True:
-        height = calculate_shutoff(rocket)
-        shutoff_altitude = height
+        controls_array = calculate_apoapsis(rocket)
         rocket.refresh()
-        print(height)
+        print(controls_array)
 
 
-def height_shutoff_thread(vessel: Vessel):
-    reference = vessel.orbit.body.reference_frame
-    while True:
-        vessel.control.throttle = shutoff_altitude
-        # vessel.control.throttle = 1 if np.linalg.norm(vessel.position(reference)) < shutoff_altitude else 0
+def calculate_apoapsis(rocket):
+    start_turn = 610000
 
-
-def calculate_shutoff(rocket):
-    max_height = 1
-    min_height = 0
+    max_height = 700000 * units.m
+    min_height = 600000 * units.m
     target_height = 610000 * units.m
 
     start_time = time.time()
-    while max_height > (min_height + 0.01):
+    while max_height > (min_height + 3 * units.m):
         mean_height = (max_height + min_height) / 2
         # def f(time, u):
         #     return (u[0:3] / np.linalg.norm(u[0:3]), 1 if (np.linalg.norm(u[0:3]) * units.km) < mean_height else 0)
-        rocket.set_direction_controller_args([mean_height])
+        rocket.set_direction_controller_args(np.array([start_turn, mean_height.to_value(units.m), 0, np.pi / 2]))
         resultant_orbit = rocket.simulate_launch()
         height_at_max_height, velocity_at_max_height = resultant_orbit.rv()
         if np.linalg.norm(height_at_max_height) < target_height:
@@ -65,7 +55,7 @@ def calculate_shutoff(rocket):
     end_time = time.time()
     # print(max_height, min_height)
     # print(end_time - start_time)
-    return min_height
+    return [start_turn, max_height.to_value(units.m), 0, np.pi / 2]
 
     # threading.Thread(target=shutoff_height_monitor, args=[conn.space_center.active_vessel]).start()
     # while (True):
@@ -75,18 +65,28 @@ def calculate_shutoff(rocket):
     #     shutoff_altitude = result.x[0]
     #     rocket.refresh()
 
+controls_array = None
 
-def shutoff_height_monitor():
-    conn = krpc.connect()
-    # tot = 0
-    vessel = conn.space_center.active_vessel
+def control_monitor(vessel: Vessel):
+    reference_frame = vessel.orbit.body.non_rotating_reference_frame
     while True:
-        vessel.control.throttle = (
-            1
-            if 1354.98046875 > vessel.flight(vessel.reference_frame).mean_altitude
-            else 0
-        )
-
+        if controls_array is None:
+            continue
+        else:
+            start_height, end_height, heading, final_pitch = controls_array
+            initial_pitch = np.pi / 2
+            height = np.linalg.norm(vessel.position(reference_frame))
+            vertical_velocity = np.dot(vessel.velocity(reference_frame), vessel.position(reference_frame)) / height
+            vessel.control.throttle = (
+                1
+                if height < end_height
+                else 0
+            )
+            pitch = np.interp(height, np.array([start_height, end_height]), np.array([initial_pitch, final_pitch]))
+            vessel.auto_pilot.engage()
+            vessel.auto_pilot.target_heading = np.rad2deg(heading)
+            vessel.auto_pilot.target_roll = 0
+            vessel.auto_pilot.target_pitch = np.rad2deg(pitch)
 
 def aerodynamic_test():
     conn = krpc.connect()

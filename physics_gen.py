@@ -242,9 +242,21 @@ def aerodynamic_acceleration_at_time_t(
 
 @njit(cache=True)
 def direction_controller(time, u, direction_controller_args):
-    max_height = direction_controller_args[0]
-    return (u[0:3] / np.linalg.norm(u[0:3])), (
-        max_height
+    start_height, end_height, heading, final_pitch = direction_controller_args
+    initial_pitch = np.pi / 2
+    position = u[0:3]
+    height = np.linalg.norm(position)
+    pitch = np.interp(height, np.array([start_height, end_height]), np.array([initial_pitch, final_pitch]))
+    up = position / np.linalg.norm(position)
+    east_unnormalized = np.cross(np.array([0,1,0]), up)
+    east = east_unnormalized / np.linalg.norm(position)
+    north = np.cross(up, east)
+
+    flat_direction = north * np.cos(heading) + east * np.sin(heading)
+    direction = flat_direction * np.cos(pitch) + up * np.sin(pitch)
+
+    return (direction), (
+        1 if height < end_height else 0
         # 1 if np.linalg.norm(u[0:3]) < max_height else 0
     )
 
