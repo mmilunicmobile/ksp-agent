@@ -6,6 +6,19 @@ import numpy as np
 from krpc.services.spacecenter import Vessel
 from threading import Thread
 
+import json
+
+def characterize_rocket(rocket: KRPCSimulatedRocket, vessel: Vessel):
+    characterizations = []
+    while True:
+        characterizations.append(rocket.to_json())
+        if not vessel.control.activate_next_stage():
+            break
+        rocket.refresh()
+
+    with open("rocket_characterization.json", "w") as f:
+        json.dump(characterizations, f)
+
 def main():
     global controls_array
     conn = krpc.connect()
@@ -15,6 +28,7 @@ def main():
         raise ValueError("No space center found.")
 
     rocket = KRPCSimulatedRocket(space_center.active_vessel)
+    characterize_rocket(rocket, space_center.active_vessel)
     # def periapsis_calc(height):
     #     height = height[0]
     #     height *= 0.001

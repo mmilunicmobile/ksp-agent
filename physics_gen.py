@@ -9,6 +9,8 @@ from matplotlib import pyplot as plt
 from krpc.services.spacecenter import Vessel
 from poliastro._math.ivp import DOP853, solve_ivp
 from numba import njit
+import json
+from typing import Any
 
 GRAVITY = 9.81 * (units.m / (units.s**2))
 GRAVITY_NUMBA = 9.81
@@ -261,7 +263,40 @@ def direction_controller(time, u, direction_controller_args):
     )
 
 
+from typing import Any
+
+
+class RocketCharacterization:
+    def __init__(self, characterization_file_path):
+        with open(characterization_file_path, "r") as f:
+            self.characterizations = json.load(f)
+
+    def get_characteristics_at_fuel_mass(
+        self, used_fuel_mass
+    ) -> dict[str, Any] | None:
+        for characterization in self.characterizations:
+            if characterization["fuel_mass"] >= used_fuel_mass:
+                char_copy = characterization.copy()
+                char_copy["fuel_mass"] -= used_fuel_mass
+                return char_copy
+        return None
+
+    def get_delta_v(self, used_fuel_mass):
+        total_delta_v = 0
+        for characterization in self.characterizations:
+            if characterization["fuel_mass"] > used_fuel_mass:
+                fuel_mass_in_stage = characterization["fuel_mass"] - used_fuel_mass
+                mass = characterization["mass"]
+                isp = np.mean(characterization["isp_curve"])
+                total_delta_v += isp * GRAVITY_NUMBA * np.log(mass / (mass - fuel_mass_in_stage))
+                used_fuel_mass = 0
+            else:
+                used_fuel_mass -= characterization["fuel_mass"]
+        return total_delta_v
+
+
 class KRPCSimulatedRocket:
+
     def __init__(self, vessel: Vessel):
         self.vessel = vessel
         self.body = vessel.orbit.body
@@ -394,3 +429,20 @@ class KRPCSimulatedRocket:
 
     def set_direction_controller_args(self, controller_args):
         self.direction_controller_args = controller_args
+
+    def to_json(self):
+        return {
+            "body_radius": self.body_radius.to_value(units.m),
+            "initial_position": self.initial_position.to_value(units.m).tolist(),
+            "initial_velocity": self.initial_velocity.to_value(units.m / units.s).tolist(),
+            "body_rotational_angle": self.body_rotational_angle.to_value(units.rad / units.s).tolist(),
+            "altitude_curve": self.altitude_curve.to_value(units.m).tolist(),
+            "pressure_curve": self.pressure_curve.to_value(units.Pa).tolist(),
+            "tempertature_curve": self.tempertature_curve.to_value(units.K).tolist(),
+            "thrust_curve": self.thrust_curve.to_value(units.N).tolist(),
+            "isp_curve": self.isp_curve.to_value(units.s).tolist(),
+            "mass": self.mass.to_value(units.kg),
+            "fuel_mass": self.fuel_mass.to_value(units.kg),
+            "mach_curve": self.mach_curve.tolist(),
+            "Acof_curve": self.Acof_curve.to_value(units.m**2).tolist(),
+        }
