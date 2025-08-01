@@ -21,19 +21,19 @@ def main():
     #     rocket.direction_controller = lambda time,u: (u[0:3] / np.linalg.norm(u[0:3]), min(1, max(height,0)))
     #     resultant = rocket.simulate_launch()
     #     return ((resultant.r_a.to_value(units.m) - 600000) - 10000) ** 2
-    height_shutoff = Thread(
+    control_thread = Thread(
         target=control_monitor, args=(space_center.active_vessel,)
     )
-    height_shutoff.daemon = True
-    height_shutoff.start()
+    control_thread.daemon = True
+    control_thread.start()
 
     while True:
-        controls_array = calculate_apoapsis(rocket)
+        controls_array = calculate_controls_orbit_launch(rocket)
         rocket.refresh()
         print(controls_array)
 
 
-def calculate_apoapsis(rocket):
+def calculate_controls_orbit_launch(rocket):
     start_turn = 610000
 
     max_height = 700000 * units.m
