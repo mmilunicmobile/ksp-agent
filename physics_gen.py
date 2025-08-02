@@ -9,6 +9,7 @@ from matplotlib import pyplot as plt
 from krpc.services.spacecenter import Vessel
 from poliastro._math.ivp import DOP853, solve_ivp
 from numba import njit
+from numba.experimental import jitclass
 import json
 from typing import Any
 
@@ -266,33 +267,69 @@ def direction_controller(time, u, direction_controller_args):
 from typing import Any
 
 
+from numba.experimental import jitclass
+
+
+@jitclass
+class StageCharacterization:
+    def __init__(
+        self,
+        fuel_mass: float,
+        mass: float,
+        isp_curve: np.ndarray,
+        altitude_curve: np.ndarray,
+    ):
+        self.fuel_mass = fuel_mass
+        self.mass = mass
+        self.isp_curve = isp_curve
+        self.altitude_curve = altitude_curve
+
+
 class RocketCharacterization:
     def __init__(self, characterization_file_path):
         with open(characterization_file_path, "r") as f:
-            self.characterizations = json.load(f)
+            characterizations_json = json.load(f)
+        self.characterizations = [
+            StageCharacterization(
+                c["fuel_mass"],
+                c["mass"],
+                np.array(c["isp_curve"]),
+                np.array(c["altitude_curve"]),
+            )
+            for c in characterizations_json
+        ]
 
-    def get_characteristics_at_fuel_mass(
-        self, used_fuel_mass
-    ) -> dict[str, Any] | None:
-        for characterization in self.characterizations:
-            if characterization["fuel_mass"] >= used_fuel_mass:
-                char_copy = characterization.copy()
-                char_copy["fuel_mass"] -= used_fuel_mass
-                return char_copy
-        return None
+    def get_characteristics_at_fuel_mass(self, used_fuel_mass):
+        return get_characteristics_at_fuel_mass_jit(self.characterizations, used_fuel_mass)
 
     def get_delta_v(self, used_fuel_mass):
-        total_delta_v = 0
-        for characterization in self.characterizations:
-            if characterization["fuel_mass"] > used_fuel_mass:
-                fuel_mass_in_stage = characterization["fuel_mass"] - used_fuel_mass
-                mass = characterization["mass"]
-                isp = np.mean(characterization["isp_curve"])
-                total_delta_v += isp * GRAVITY_NUMBA * np.log(mass / (mass - fuel_mass_in_stage))
-                used_fuel_mass = 0
-            else:
-                used_fuel_mass -= characterization["fuel_mass"]
-        return total_delta_v
+        return get_delta_v_jit(self.characterizations, used_fuel_mass)
+
+
+@njit
+def get_characteristics_at_fuel_mass_jit(characterizations, used_fuel_mass):
+    for characterization in characterizations:
+        if characterization.fuel_mass >= used_fuel_mass:
+            return characterization
+    return None
+
+
+@njit
+def get_delta_v_jit(characterizations, used_fuel_mass):
+    total_delta_v = 0
+    for characterization in characterizations:
+        if characterization.fuel_mass > used_fuel_mass:
+            fuel_mass_in_stage = characterization.fuel_mass - used_fuel_mass
+            mass = characterization.mass
+            isp = np.mean(characterization.isp_curve)
+            total_delta_v += (
+                isp * GRAVITY_NUMBA * np.log(mass / (mass - fuel_mass_in_stage))
+            )
+            used_fuel_mass = 0
+        else:
+            used_fuel_mass -= characterization.fuel_mass
+    return total_delta_v
+
 
 
 class KRPCSimulatedRocket:

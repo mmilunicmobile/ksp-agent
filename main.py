@@ -11,7 +11,7 @@ def main():
     time.sleep(5)
 
     target_altitude = 500
-
+    conn.mech_jeb
     current_vessel = conn.space_center.active_vessel
 
     current_vessel.control.sas = False
