@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "serverName": {
+      "command": "uv",
+      "args": ["run", "mcp_main.py"],
+      "timeout": 3600000,
+      "trust": false
+    }
+  }
+}
