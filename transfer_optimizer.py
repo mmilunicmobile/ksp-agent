@@ -1,10 +1,13 @@
-from poliastro.bodies import Body
+from poliastro.bodies import Body, Earth
 from poliastro.twobody import Orbit
 from poliastro.maneuver import Maneuver
 from typing import Callable, Literal
 import numpy as np
 from abc import ABC, abstractmethod
 from astropy.time import Time, TimeDelta
+from scipy.optimize import differential_evolution
+from astropy import units as u
+from astropy.units import Quantity
 
 class OptimizableSet(ABC):
     @abstractmethod
@@ -37,17 +40,30 @@ class OrbitSet(OptimizableSet):
     
     def get_cost(self, x):
         return self._get_delta_v_cost(x)
+    
+    @staticmethod
+    def from_orbit(orbit: Orbit):
+        return OrbitSet(lambda x: orbit, np.array([]), [], lambda x: 0)
+    
+    def free_nu(self):
+        def orbit_generator(x):
+            initial_orbit = self.get_orbit(x[0:-1])
+            attractor = initial_orbit.attractor
+            a, ecc, inc, raan, argp, nu = initial_orbit.classical()
+            return Orbit.from_classical(attractor, a, ecc, inc, raan, argp, x[-1] * u.deg)
+            
+        return OrbitSet(orbit_generator, np.concatenate([self.get_x(), np.array([0])]), self.get_constraints() + [(-360, 360)], lambda x: self.get_cost(x[0:-1]) + 0)
 
 class TwoOrbitSetTransfer(OptimizableSet):
     """
     Is an orbit set that allows minimization of the delta-v required for a Lambert transfer from orbital_set_1 to orbital_set_2 and then from orbital_set_2 to orbital_set_3
     """
-    def __init__(self, orbit_set_1: OrbitSet, orbit_set_2: OrbitSet, maximum_time: float):
+    def __init__(self, orbit_set_1: OrbitSet, orbit_set_2: OrbitSet, maximum_time: Quantity):
         self._orbit_set_1 = orbit_set_1
         self._orbit_set_2 = orbit_set_2
         self._maximum_time = maximum_time
 
-        self._initial_x = np.concatenate([orbit_set_1.get_x(), orbit_set_2.get_x(), 0.33, 0.66])
+        self._initial_x = np.concatenate([orbit_set_1.get_x(), orbit_set_2.get_x(), [0.33, 0.66]])
         self._constraints = orbit_set_1.get_constraints() + orbit_set_2.get_constraints() + [(0,1), (0,1)]
     
         self._x1_len = self._orbit_set_1.get_N()
@@ -63,7 +79,7 @@ class TwoOrbitSetTransfer(OptimizableSet):
         x1 = x[0:self._x1_len]
         x2 = x[self._x1_len:self._x2_len]
         
-        cost =  self._orbit_set_1.get_cost(x1) + self._orbit_set_2.get_cost(x2) + self.get_maneuver(x).get_total_cost()
+        cost =  self._orbit_set_1.get_cost(x1) + self._orbit_set_2.get_cost(x2) + self.get_maneuver(x).get_total_cost().to_value(u.m / u.s)
         return cost
 
     def get_maneuver(self, x: np.ndarray) -> Maneuver:
@@ -76,11 +92,41 @@ class TwoOrbitSetTransfer(OptimizableSet):
         
         # technically this doesnt work
         transfer_start = self._orbit_set_1.get_orbit(x1).propagate(times[0])
-        transfer_end = self._orbit_set_2.get_orbit(x2).propagate(times[1])
+        transfer_end = self._orbit_set_2.get_orbit(x2).propagate(times[1] + 1 * u.s)
 
         theoretical_manuver = Maneuver.lambert(transfer_start, transfer_end)
 
         return theoretical_manuver
+    
+    def get_orbit_1(self, x: np.ndarray):
+        x1 = x[0:self._x1_len]
+        return self._orbit_set_1.get_orbit(x1)
+
+    def get_orbit_1_cost(self, x: np.ndarray):
+        x1 = x[0:self._x1_len]
+        return self._orbit_set_1.get_cost(x1)
+
+    def get_orbit_2(self, x: np.ndarray):
+        x2 = x[self._x1_len:self._x2_len]
+        return self._orbit_set_2.get_orbit(x2)
+
+    def get_orbit_2_cost(self, x: np.ndarray):
+        x2 = x[self._x1_len:self._x2_len]
+        return self._orbit_set_2.get_cost(x2)
 
 def optimize_set(set: OptimizableSet) -> np.ndarray:
-    
+    result = differential_evolution(set.get_cost, set.get_constraints(), x0=set.get_x())
+    if result.success:
+        return result.x
+    else:
+        raise Exception(f"Optimization failed: {result.message}")
+
+def main():
+    first_orbit = OrbitSet.from_orbit(Orbit.circular(Earth, 100 * u.km))
+    second_orbit = OrbitSet.from_orbit(Orbit.circular(Earth, 200 * u.km, inc=5 * u.deg))
+    transfer_set = TwoOrbitSetTransfer(first_orbit, second_orbit, 1 * u.day)
+    x = optimize_set(transfer_set)
+    print(transfer_set.get_maneuver(x))
+
+if __name__ == "__main__":
+    main()
