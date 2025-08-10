@@ -6,5 +6,6 @@
       "timeout": 3600000,
       "trust": false
     }
-  }
+  },
+  "contextFileName": "AGENTS.md"
 }

@@ -33,7 +33,7 @@ class TimeSelector(BaseModel):
 mcp = FastMCP("Kerbal Space Program")
 
 async def _execute_maneuver(op_name: str, op, ctx: Context):
-    
+    mech_jeb.staging_controller.enabled = True
     op.make_nodes()
     if hasattr(mech_jeb.maneuver_planner, "error_message"):
         warning = mech_jeb.maneuver_planner.error_message
@@ -47,6 +47,7 @@ async def _execute_maneuver(op_name: str, op, ctx: Context):
 
     while executor.enabled:
         await asyncio.sleep(1)
+    mech_jeb.staging_controller.enabled = False
 
     return f"{op_name} maneuver complete."
 
@@ -397,6 +398,52 @@ async def say_message(msg: str) -> str:
     subprocess.call(["say", msg])
 
     return f"Said: {msg}"
+
+@mcp.tool()
+async def warp_to_next_sphere_of_influence(ctx: Context) -> str:
+    """Warps the active vessel to the next sphere of influence."""
+    vessel = space_center.active_vessel
+    orbit = vessel.orbit
+    
+    time_to_soi_change = orbit.time_to_soi_change
+
+    if time_to_soi_change is None or time_to_soi_change <= 0:
+        return "No upcoming sphere of influence change."
+
+    # add a bit of a buffer just in case
+    warp_time = space_center.ut + time_to_soi_change + 10
+
+    space_center.warp_to(warp_time)
+
+    await ctx.info(f"Warping to next sphere of influence.")
+
+    while space_center.warp_factor > 0:
+        await asyncio.sleep(1)
+
+    return "Warp complete."
+
+@mcp.tool()
+def list_celestial_bodies() -> list[str]:
+    """Returns a list of all celestial bodies by their names."""
+    celestial_bodies = space_center.bodies
+    return [body.name for body in celestial_bodies.values()]
+
+@mcp.tool()
+def set_target_celestial_body(name: str) -> str:
+    """Sets the target to a celestial body by its name.
+
+    Args:
+        name: The name of the celestial body to target.
+    """
+    try:
+        celestial_bodies = space_center.bodies
+        for body in celestial_bodies.values():
+            if body.name.lower() == name.lower():
+                space_center.target_body = body
+                return f"Target set to {body.name}."
+        return f"Error: Celestial body '{name}' not found."
+    except Exception as e:
+        return f"An error occurred: {e}"
 
 @mcp.tool()
 def get_current_time() -> str:
