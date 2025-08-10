@@ -2,7 +2,7 @@
   "mcpServers": {
     "serverName": {
       "command": "uv",
-      "args": ["run", "mcp_main.py"],
+      "args": ["run", "krpc_server.py"],
       "timeout": 3600000,
       "trust": false
     }

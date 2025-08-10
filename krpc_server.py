@@ -22,6 +22,9 @@ class TimeReference(enum.Enum):
     REL_NEAREST_AD = "rel_nearest_ad"
     X_FROM_NOW = "x_from_now"
 
+def time_reference_converter(enum_reference: TimeReference):
+    return getattr(mech_jeb.TimeReference, enum_reference.value)
+
 class TimeSelector(BaseModel):
     time_reference: TimeReference
     lead_time: float | None = None
@@ -32,17 +35,18 @@ mcp = FastMCP("Kerbal Space Program")
 async def _execute_maneuver(op_name: str, op, ctx: Context):
     
     op.make_nodes()
-    warning = mech_jeb.maneuver_planner.error_message
-    if warning:
-        return f"MechJeb Warning: {warning}"
+    if hasattr(mech_jeb.maneuver_planner, "error_message"):
+        warning = mech_jeb.maneuver_planner.error_message
+        if warning:
+            return f"MechJeb Warning: {warning}"
 
     executor = mech_jeb.node_executor
     executor.execute_all_nodes()
 
     await ctx.info(f"Executing {op_name} maneuver.")
 
-    while not executor.enabled:
-        await asyncio.sleep(0.1)
+    while executor.enabled:
+        await asyncio.sleep(1)
 
     return f"{op_name} maneuver complete."
 
@@ -57,7 +61,7 @@ async def operation_apoapsis(ctx: Context, new_apoapsis: float, time_selector: T
     
     op = mech_jeb.maneuver_planner.operation_apoapsis
     op.new_apoapsis = new_apoapsis
-    op.time_selector.time_reference = time_selector.time_reference.value
+    op.time_selector.time_reference = time_reference_converter(time_selector.time_reference)
     if time_selector.lead_time:
         op.time_selector.lead_time = time_selector.lead_time
     if time_selector.circularize_altitude:
@@ -73,7 +77,7 @@ async def operation_circularize(ctx: Context, time_selector: TimeSelector) -> st
     """
     
     op = mech_jeb.maneuver_planner.operation_circularize
-    op.time_selector.time_reference = time_selector.time_reference.value
+    op.time_selector.time_reference = time_reference_converter(time_selector.time_reference)
     if time_selector.lead_time:
         op.time_selector.lead_time = time_selector.lead_time
     if time_selector.circularize_altitude:
@@ -82,11 +86,11 @@ async def operation_circularize(ctx: Context, time_selector: TimeSelector) -> st
 
 @mcp.tool()
 async def operation_course_correction(ctx: Context, course_correct_final_pe_a: float, intercept_distance: float) -> str:
-    """Creates a maneuver to fine-tune the closest approach to a target.
+    """Creates a maneuver to fine-tune the closest approach to a target. Note, if you are aproaching a body, this does not account for gravity, make sure to add at least the body radius so that you do not crash into the surface.
     
     Args:
-        course_correct_final_pe_a: The final periapsis altitude.
-        intercept_distance: The intercept distance.
+        course_correct_final_pe_a: This is the distance to the center of the body in meters.
+        intercept_distance: The intercept distance. This matters if you are aiming for a vessel.
     """
     op = mech_jeb.maneuver_planner.operation_course_correction
     op.course_correct_final_pe_a = course_correct_final_pe_a
@@ -106,7 +110,7 @@ async def operation_ellipticize(ctx: Context, new_apoapsis: float, new_periapsis
     op = mech_jeb.maneuver_planner.operation_ellipticize
     op.new_apoapsis = new_apoapsis
     op.new_periapsis = new_periapsis
-    op.time_selector.time_reference = time_selector.time_reference.value
+    op.time_selector.time_reference = time_reference_converter(time_selector.time_reference)
     if time_selector.lead_time:
         op.time_selector.lead_time = time_selector.lead_time
     if time_selector.circularize_altitude:
@@ -124,7 +128,7 @@ async def operation_inclination(ctx: Context, new_inclination: float, time_selec
     
     op = mech_jeb.maneuver_planner.operation_inclination
     op.new_inclination = new_inclination
-    op.time_selector.time_reference = time_selector.time_reference.value
+    op.time_selector.time_reference = time_reference_converter(time_selector.time_reference)
     if time_selector.lead_time:
         op.time_selector.lead_time = time_selector.lead_time
     if time_selector.circularize_altitude:
@@ -152,7 +156,7 @@ async def operation_kill_rel_vel(ctx: Context, time_selector: TimeSelector) -> s
     """
     
     op = mech_jeb.maneuver_planner.operation_kill_rel_vel
-    op.time_selector.time_reference = time_selector.time_reference.value
+    op.time_selector.time_reference = time_reference_converter(time_selector.time_reference)
     if time_selector.lead_time:
         op.time_selector.lead_time = time_selector.lead_time
     if time_selector.circularize_altitude:
@@ -170,7 +174,7 @@ async def operation_lambert(ctx: Context, intercept_interval: float, time_select
     
     op = mech_jeb.maneuver_planner.operation_lambert
     op.intercept_interval = intercept_interval
-    op.time_selector.time_reference = time_selector.time_reference.value
+    op.time_selector.time_reference = time_reference_converter(time_selector.time_reference)
     if time_selector.lead_time:
         op.time_selector.lead_time = time_selector.lead_time
     if time_selector.circularize_altitude:
@@ -188,7 +192,7 @@ async def operation_lan(ctx: Context, new_lan: float, time_selector: TimeSelecto
     
     op = mech_jeb.maneuver_planner.operation_lan
     op.new_lan = new_lan
-    op.time_selector.time_reference = time_selector.time_reference.value
+    op.time_selector.time_reference = time_reference_converter(time_selector.time_reference)
     if time_selector.lead_time:
         op.time_selector.lead_time = time_selector.lead_time
     if time_selector.circularize_altitude:
@@ -206,7 +210,7 @@ async def operation_longitude(ctx: Context, new_surface_longitude: float, time_s
     
     op = mech_jeb.maneuver_planner.operation_longitude
     op.new_surface_longitude = new_surface_longitude
-    op.time_selector.time_reference = time_selector.time_reference.value
+    op.time_selector.time_reference = time_reference_converter(time_selector.time_reference)
     if time_selector.lead_time:
         op.time_selector.lead_time = time_selector.lead_time
     if time_selector.circularize_altitude:
@@ -236,7 +240,7 @@ async def operation_periapsis(ctx: Context, new_periapsis: float, time_selector:
     
     op = mech_jeb.maneuver_planner.operation_periapsis
     op.new_periapsis = new_periapsis
-    op.time_selector.time_reference = time_selector.time_reference.value
+    op.time_selector.time_reference = time_reference_converter(time_selector.time_reference)
     if time_selector.lead_time:
         op.time_selector.lead_time = time_selector.lead_time
     if time_selector.circularize_altitude:
@@ -252,7 +256,7 @@ async def operation_plane(ctx: Context, time_selector: TimeSelector) -> str:
     """
     
     op = mech_jeb.maneuver_planner.operation_plane
-    op.time_selector.time_reference = time_selector.time_reference.value
+    op.time_selector.time_reference = time_reference_converter(time_selector.time_reference)
     if time_selector.lead_time:
         op.time_selector.lead_time = time_selector.lead_time
     if time_selector.circularize_altitude:
@@ -272,7 +276,7 @@ async def operation_resonant_orbit(ctx: Context, resonance_denominator: int, res
     op = mech_jeb.maneuver_planner.operation_resonant_orbit
     op.resonance_denominator = resonance_denominator
     op.resonance_numerator = resonance_numerator
-    op.time_selector.time_reference = time_selector.time_reference.value
+    op.time_selector.time_reference = time_reference_converter(time_selector.time_reference)
     if time_selector.lead_time:
         op.time_selector.lead_time = time_selector.lead_time
     if time_selector.circularize_altitude:
@@ -289,7 +293,7 @@ async def operation_semi_major(ctx: Context, new_semi_major_axis: float, time_se
     """
     op = mech_jeb.maneuver_planner.operation_semi_major
     op.new_semi_major_axis = new_semi_major_axis
-    op.time_selector.time_reference = time_selector.time_reference.value
+    op.time_selector.time_reference = time_reference_converter(time_selector.time_reference)
     if time_selector.lead_time:
         op.time_selector.lead_time = time_selector.lead_time
     if time_selector.circularize_altitude:
@@ -310,7 +314,7 @@ async def operation_transfer(ctx: Context, intercept_only: bool, period_offset: 
     op.intercept_only = intercept_only
     op.period_offset = period_offset
     op.simple_transfer = simple_transfer
-    op.time_selector.time_reference = time_selector.time_reference.value
+    op.time_selector.time_reference = time_reference_converter(time_selector.time_reference)
     if time_selector.lead_time:
         op.time_selector.lead_time = time_selector.lead_time
     if time_selector.circularize_altitude:
