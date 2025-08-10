@@ -12,4 +12,6 @@ If you are attempting to get into orbit around a body after transferring from an
 
 The rendezvous with target method will not account for the gravity of the moon when determining your closest approach. The return from moon tool also may not. You can do this by using the operation_periapsis tool and using X_FROM_NOW as the TimeReference once you are in the moon's soi.
 
+When attempting to transfer to a moon of a body you are orbiting, try to use the operation_transfer tool to do a Hohmann transfer to the body.
+
 Do not wait for confirmation between actions if you believe you are doing the right thing, the user can interrupt you if something is going wrong.

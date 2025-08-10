@@ -5,6 +5,7 @@ import krpc
 import asyncio
 import enum
 from pydantic import BaseModel
+import math
 
 class TimeReference(enum.Enum):
     ALTITUDE = "altitude"
@@ -84,6 +85,39 @@ async def operation_circularize(ctx: Context, time_selector: TimeSelector) -> st
     if time_selector.circularize_altitude:
         op.time_selector.circularize_altitude = time_selector.circularize_altitude
     return await _execute_maneuver("Circularize", op, ctx)
+
+class OrbitalInformation(BaseModel):
+    body_name: str
+    apoapsis_altitude: float
+    periapsis_altitude: float
+    semi_major_axis: float
+    semi_minor_axis: float
+    eccentricity: float
+    inclination: float
+    period: float
+    time_to_apoapsis: float
+    time_to_periapsis: float
+    time_to_soi_change: float | None
+
+@mcp.tool()
+def get_orbital_information() -> OrbitalInformation:
+    """Returns orbital information for the active vessel."""
+    vessel = space_center.active_vessel
+    orbit = vessel.orbit
+    soi_time = orbit.time_to_soi_change
+    return OrbitalInformation(
+        body_name=orbit.body.name,
+        apoapsis_altitude=orbit.apoapsis_altitude,
+        periapsis_altitude=orbit.periapsis_altitude,
+        semi_major_axis=orbit.semi_major_axis,
+        semi_minor_axis=orbit.semi_minor_axis,
+        eccentricity=orbit.eccentricity,
+        inclination=orbit.inclination,
+        period=orbit.period,
+        time_to_apoapsis=orbit.time_to_apoapsis,
+        time_to_periapsis=orbit.time_to_periapsis,
+        time_to_soi_change= soi_time if not math.isnan(soi_time) else None,
+    )
 
 @mcp.tool()
 async def operation_course_correction(ctx: Context, course_correct_final_pe_a: float, intercept_distance: float) -> str:

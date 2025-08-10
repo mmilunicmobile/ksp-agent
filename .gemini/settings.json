@@ -4,7 +4,7 @@
       "command": "uv",
       "args": ["run", "krpc_server.py"],
       "timeout": 3600000,
-      "trust": false
+      "trust": true
     }
   },
   "contextFileName": "AGENTS.md"
