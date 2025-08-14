@@ -1,5 +1,5 @@
 import datetime
-from mcp.server.fastmcp import Context, FastMCP
+from fastmcp import FastMCP, Context
 import subprocess
 import krpc
 import asyncio
@@ -31,7 +31,7 @@ class TimeSelector(BaseModel):
     lead_time: float | None = None
     circularize_altitude: float | None = None
 
-mcp = FastMCP("Kerbal Space Program")
+mcp = FastMCP(name = "Kerbal Space Program")
 
 async def _execute_maneuver(op_name: str, op, ctx: Context):
     mech_jeb.staging_controller.enabled = True
@@ -420,6 +420,40 @@ async def launch_to_rendezvous(ctx: Context) -> str:
         # await ctx.report_progress(progress=0.5, total=1.0, message=f"Distance to target: {int(distance)} meters")
 
     return "Rendezvous ascent complete."
+
+@mcp.tool()
+async def operation_land(ctx: Context | None, touchdown_speed: float = 2.0, auto_deploy_gears: bool = True, auto_deploy_parachutes: bool = False) -> str:
+    """Lands the active vessel. You can call this from orbit if you are landing on a body with no atmosphere.
+    
+    Args:
+        touchdown_speed: The desired touchdown speed in m/s.
+        auto_deploy_gears: Whether to automatically deploy landing gears.
+        auto_deploy_parachutes: Whether to automatically deploy parachutes.
+    """
+    landing = mech_jeb.landing_autopilot
+    
+    landing.land_at_target = False
+    landing.land_untargeted = True
+
+    landing.touchdown_speed = touchdown_speed
+    landing.auto_deploy_gears = auto_deploy_gears
+    landing.auto_deploy_parachutes = auto_deploy_parachutes
+    
+    landing.enabled = True
+    
+    if ctx:
+        await ctx.info("Landing sequence initiated.")
+    
+    vessel = space_center.active_vessel
+    flight = vessel.flight(vessel.orbit.body.reference_frame)
+
+    while landing.enabled:
+        await asyncio.sleep(1)
+        altitude = flight.surface_altitude
+        if ctx:
+            await ctx.info(f"Current altitude: {int(altitude)}m")
+
+    return "Landing complete."
 
 @mcp.tool()
 async def say_message(msg: str) -> str:

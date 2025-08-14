@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "serverName": {
+    "Kerbal Space Program": {
       "command": "uv",
       "args": ["run", "krpc_server.py"],
       "timeout": 3600000,
